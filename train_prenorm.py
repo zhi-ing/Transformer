@@ -1,24 +1,37 @@
 # ============================================================
-# Pre-Norm Transformer Training
+# Pre-Norm Transformer Ablation Training
 #
-# 与原来的 train.py 保持相同训练流程，
-# 唯一核心区别：
+# 支持：
+#     baseline
+#     no_pe
+#     one_head
+#     three_layers
 #
-# 原模型：
-#     models.transformer.Transformer
-#     -> Post-Norm
+# 使用：
+#     python train_prenorm.py --ablation baseline
+#     python train_prenorm.py --ablation no_pe
+#     python train_prenorm.py --ablation one_head
+#     python train_prenorm.py --ablation three_layers
 #
-# 新模型：
-#     models.transformer_prenorm.TransformerPreNorm
-#     -> Pre-Norm
+# 每个实验使用独立 checkpoint：
 #
-# 新模型的 checkpoint 不覆盖原模型：
-#
-#     checkpoints/best_model_prenorm.pth
-#     checkpoints/last_model_prenorm.pth
+# checkpoints/ablation/
+# ├── baseline/
+# │   ├── best.pth
+# │   └── last.pth
+# ├── no_pe/
+# │   ├── best.pth
+# │   └── last.pth
+# ├── one_head/
+# │   ├── best.pth
+# │   └── last.pth
+# └── three_layers/
+#     ├── best.pth
+#     └── last.pth
 # ============================================================
 
 import os
+import argparse
 
 import torch
 import torch.nn as nn
@@ -29,11 +42,6 @@ from dataset.collate_fn import collate_fn as collate_batch
 from dataset.tokenizer import Tokenizer
 from dataset.translation_dataset import TranslationDataset
 
-# ============================================================
-# 注意：
-# 这里使用新的 Pre-Norm Transformer
-# ============================================================
-
 from models.transformer_prenorm import TransformerPreNorm
 
 from utils import config
@@ -42,7 +50,33 @@ from utils.seed import set_seed
 
 
 # ============================================================
-# 1. 数据路径解析
+# 1. 命令行参数
+# ============================================================
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(
+        description="Train Pre-Norm Transformer with ablation experiments."
+    )
+
+    parser.add_argument(
+        "--ablation",
+        type=str,
+        default="baseline",
+        choices=[
+            "baseline",
+            "no_pe",
+            "one_head",
+            "three_layers"
+        ],
+        help="Ablation experiment name."
+    )
+
+    return parser.parse_args()
+
+
+# ============================================================
+# 2. 数据路径解析
 # ============================================================
 
 def resolve_data_path(path):
@@ -64,7 +98,7 @@ def resolve_data_path(path):
 
 
 # ============================================================
-# 2. 创建 Tokenizer
+# 3. 创建 Tokenizer
 # ============================================================
 
 def create_tokenizer():
@@ -81,7 +115,7 @@ def create_tokenizer():
 
 
 # ============================================================
-# 3. 创建 Dataset
+# 4. 创建 Dataset
 # ============================================================
 
 def create_dataset(
@@ -107,7 +141,7 @@ def create_dataset(
 
 
 # ============================================================
-# 4. 创建 DataLoader
+# 5. 创建 DataLoader
 # ============================================================
 
 def create_dataloader(
@@ -122,7 +156,7 @@ def create_dataloader(
         return collate_batch(
             batch,
             src_pad_id,
-            tgt_pad_id,
+            tgt_pad_id
         )
 
     train_loader = DataLoader(
@@ -143,14 +177,15 @@ def create_dataloader(
 
 
 # ============================================================
-# 5. 创建 Pre-Norm Transformer
+# 6. 创建 Transformer
 # ============================================================
 
 def create_model(
     src_vocab_size,
     tgt_vocab_size,
     src_pad_id,
-    tgt_pad_id
+    tgt_pad_id,
+    ablation
 ):
 
     model = TransformerPreNorm(
@@ -174,13 +209,17 @@ def create_model(
         dropout=config.DROPOUT,
 
         max_len=config.MAX_LEN,
+
+        # 关键：
+        # 将消融实验名称传给模型
+        ablation=ablation
     )
 
     return model.to(config.DEVICE)
 
 
 # ============================================================
-# 6. Loss
+# 7. Loss
 # ============================================================
 
 def create_loss(tgt_pad_id):
@@ -198,7 +237,7 @@ def create_loss(tgt_pad_id):
 
 
 # ============================================================
-# 7. Adam Optimizer
+# 8. Adam Optimizer
 # ============================================================
 
 def create_optimizer(model):
@@ -216,7 +255,7 @@ def create_optimizer(model):
 
 
 # ============================================================
-# 8. Noam Scheduler
+# 9. Noam Scheduler
 # ============================================================
 
 def create_scheduler(optimizer):
@@ -232,7 +271,7 @@ def create_scheduler(optimizer):
 
 
 # ============================================================
-# 9. 单个 Epoch 训练
+# 10. 单个 Epoch 训练
 # ============================================================
 
 def train_one_epoch(
@@ -283,12 +322,6 @@ def train_one_epoch(
 
         # ----------------------------------------------------
         # reshape
-        #
-        # logits:
-        # (batch, tgt_len, vocab_size)
-        #
-        # ->
-        # (batch * tgt_len, vocab_size)
         # ----------------------------------------------------
 
         logits = logits.contiguous().view(
@@ -338,7 +371,7 @@ def train_one_epoch(
 
 
 # ============================================================
-# 10. Validation
+# 11. Validation
 # ============================================================
 
 def evaluate(
@@ -363,6 +396,7 @@ def evaluate(
             tgt_output = batch["tgt_output"].to(device)
 
             # Forward
+
             logits, _, _, _ = model(
                 src,
                 tgt_input
@@ -388,7 +422,7 @@ def evaluate(
 
 
 # ============================================================
-# 11. 保存 Checkpoint
+# 12. 保存 Checkpoint
 # ============================================================
 
 def save_checkpoint(
@@ -397,7 +431,8 @@ def save_checkpoint(
     scheduler,
     epoch,
     path,
-    best_val_loss
+    best_val_loss,
+    ablation
 ):
 
     os.makedirs(
@@ -420,6 +455,10 @@ def save_checkpoint(
 
         "best_val_loss":
             best_val_loss,
+
+        # 保存实验名称
+        "ablation":
+            ablation,
     }
 
     torch.save(
@@ -433,10 +472,14 @@ def save_checkpoint(
 
 
 # ============================================================
-# 12. Main
+# 13. Main
 # ============================================================
 
 def main():
+
+    args = parse_args()
+
+    ablation = args.ablation
 
     # --------------------------------------------------------
     # 随机种子
@@ -444,21 +487,20 @@ def main():
 
     set_seed(config.SEED)
 
-    print(
-        "============================================================"
-    )
+    print()
+    print("=" * 70)
+    print("Pre-Norm Transformer Ablation Training")
+    print("=" * 70)
 
     print(
-        "Pre-Norm Transformer Training"
-    )
-
-    print(
-        "============================================================"
+        f"Experiment: {ablation}"
     )
 
     print(
         f"Device: {config.DEVICE}"
     )
+
+    print("=" * 70)
 
     # --------------------------------------------------------
     # Tokenizer
@@ -543,11 +585,49 @@ def main():
         src_tokenizer.pad_id,
 
         tgt_tokenizer.pad_id,
+
+        ablation
     )
 
+    print()
     print(
         "Pre-Norm Transformer created."
     )
+
+    # --------------------------------------------------------
+    # 打印实验配置
+    # --------------------------------------------------------
+
+    print()
+    print("-" * 70)
+    print("Ablation Configuration")
+    print("-" * 70)
+
+    print(
+        f"Experiment       : {ablation}"
+    )
+
+    print(
+        f"d_model          : {config.D_MODEL}"
+    )
+
+    print(
+        f"num_layers       : {config.NUM_LAYERS}"
+    )
+
+    print(
+        f"num_heads        : {config.NUM_HEADS}"
+    )
+
+    print(
+        f"d_ff             : {config.D_FF}"
+    )
+
+    print(
+        f"dropout          : {config.DROPOUT}"
+    )
+
+    print("-" * 70)
 
     # --------------------------------------------------------
     # Loss
@@ -574,26 +654,39 @@ def main():
     )
 
     # --------------------------------------------------------
-    # 新的 checkpoint 路径
+    # Checkpoint 路径
     #
-    # 注意：
-    # 不使用原来的 best_model.pth
-    # 不使用原来的 last_model.pth
+    # 每个消融实验独立保存
     # --------------------------------------------------------
 
-    best_model_path = os.path.join(
+    checkpoint_dir = os.path.join(
         config.CHECKPOINT_DIR,
-        "best_model_prenorm.pth"
+        "ablation",
+        ablation
+    )
+
+    best_model_path = os.path.join(
+        checkpoint_dir,
+        "best.pth"
     )
 
     last_model_path = os.path.join(
-        config.CHECKPOINT_DIR,
-        "last_model_prenorm.pth"
+        checkpoint_dir,
+        "last.pth"
     )
 
     os.makedirs(
-        config.CHECKPOINT_DIR,
+        checkpoint_dir,
         exist_ok=True
+    )
+
+    print()
+    print(
+        f"Checkpoint directory:"
+    )
+
+    print(
+        f"  {checkpoint_dir}"
     )
 
     # --------------------------------------------------------
@@ -605,17 +698,21 @@ def main():
     start_epoch = 1
 
     # --------------------------------------------------------
-    # 如果之前已经训练过 Pre-Norm，
-    # 可以从 last_model_prenorm.pth 继续
+    # 如果之前训练过该消融实验
+    # 则从该实验自己的 checkpoint 继续
     # --------------------------------------------------------
 
     if os.path.exists(
         last_model_path
     ):
 
+        print()
         print(
-            f"Found checkpoint: "
-            f"{last_model_path}"
+            f"Found checkpoint:"
+        )
+
+        print(
+            f"  {last_model_path}"
         )
 
         checkpoint = torch.load(
@@ -624,19 +721,52 @@ def main():
             weights_only=True,
         )
 
+        # ----------------------------------------------------
+        # 检查 checkpoint 是否属于当前实验
+        # ----------------------------------------------------
+
+        saved_ablation = checkpoint.get(
+            "ablation",
+            None
+        )
+
+        if saved_ablation != ablation:
+
+            raise RuntimeError(
+                "Checkpoint ablation mismatch!\n"
+                f"Current experiment: {ablation}\n"
+                f"Checkpoint experiment: {saved_ablation}"
+            )
+
+        # ----------------------------------------------------
+        # 加载模型
+        # ----------------------------------------------------
+
         model.load_state_dict(
             checkpoint["model_state_dict"]
         )
 
+        # ----------------------------------------------------
+        # 加载 optimizer
+        # ----------------------------------------------------
+
         optimizer.load_state_dict(
             checkpoint["optimizer_state_dict"]
         )
+
+        # ----------------------------------------------------
+        # 加载 scheduler
+        # ----------------------------------------------------
 
         if "scheduler_state_dict" in checkpoint:
 
             scheduler.load_state_dict(
                 checkpoint["scheduler_state_dict"]
             )
+
+        # ----------------------------------------------------
+        # epoch
+        # ----------------------------------------------------
 
         loaded_epoch = checkpoint["epoch"]
 
@@ -669,6 +799,10 @@ def main():
         print()
         print(
             "=" * 70
+        )
+
+        print(
+            f"Experiment: {ablation}"
         )
 
         print(
@@ -755,6 +889,8 @@ def main():
             last_model_path,
 
             best_val_loss,
+
+            ablation
         )
 
         # ----------------------------------------------------
@@ -780,6 +916,8 @@ def main():
                 best_model_path,
 
                 best_val_loss,
+
+                ablation
             )
 
     # --------------------------------------------------------
@@ -792,7 +930,11 @@ def main():
     )
 
     print(
-        "Pre-Norm training finished."
+        "Pre-Norm ablation training finished."
+    )
+
+    print(
+        f"Experiment: {ablation}"
     )
 
     print(
