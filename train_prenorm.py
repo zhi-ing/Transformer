@@ -616,7 +616,7 @@ def main():
     )
 
     print(
-        f"num_heads        : {config.NUM_HEADS}"
+        f"num_heads        : {config.num_heads}"
     )
 
     print(
