@@ -616,7 +616,7 @@ def main():
     )
 
     print(
-        f"num_heads        : {config.num_heads}"
+        f"num_heads        : {model.num_heads}"
     )
 
     print(
